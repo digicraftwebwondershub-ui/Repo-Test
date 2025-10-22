@@ -2,6 +2,22 @@
  * @OnlyCurrentDoc
  */
 
+// --- DEPLOYMENT INSTRUCTIONS ---
+// IMPORTANT: After making any changes to this script, you MUST deploy a new version for the changes to take effect in the web app.
+// 1. Go to the top menu in the Apps Script editor and click "Deploy".
+// 2. Select "New deployment".
+// 3. IMPORTANT: In the "New deployment" dialog:
+//    a. Click the gear icon next to "Select type" and choose "Web app".
+//    b. For "Description", enter a brief note about the changes you made (e.g., "Added preview function for approvals").
+//    c. For "Execute as", select "Me".
+//    d. For "Who has access", select "Anyone".
+// 4. Click "Deploy".
+// 5. After deploying, a new Web app URL will be provided. You MUST copy this new URL.
+// 6. Paste the new URL into the `WEB_APP_URL` constant below, replacing the old one.
+//
+// NOTE: The "Script function not found: getPreviewOrgChartData" error specifically occurs when this deployment step is missed after adding that function.
+// --- END DEPLOYMENT INSTRUCTIONS ---
+
 
 // --- CONFIGURATION ---
 // IMPORTANT: You MUST update this URL if you create a new web app deployment that changes its link!
@@ -3830,18 +3846,27 @@ function getPreviewOrgChartData(requestId) {
     if (!requestSheet) throw new Error('"Org Chart Requests" sheet not found.');
     if (mainSheet.getLastRow() < 2) throw new Error('Main org chart data sheet is empty.');
 
-    // --- Get Current Live Data (similar to getEmployeeData but simplified for this purpose) ---
+    // --- Get Current Live Data as Objects ---
     const lastCol = mainSheet.getLastColumn();
     const mainData = mainSheet.getRange(2, 1, mainSheet.getLastRow() - 1, lastCol).getValues();
     const mainHeaders = mainSheet.getRange(1, 1, 1, lastCol).getValues()[0];
-    const mainHeaderMap = new Map(mainHeaders.map((h, i) => [h.trim(), i]));
-
+    
+    const liveObjects = mainData.map(row => {
+      let employee = {};
+      mainHeaders.forEach((header, i) => {
+        const key = header.toLowerCase().replace(/\s+/g, '').replace(/[^a-z0-9]/gi, '');
+        employee[key] = row[i];
+      });
+      employee.nodeId = employee['positionid'];
+      employee.managerId = employee['reportingtoid'];
+      return employee;
+    });
+    
     // --- Get Request Details ---
     const requestDataRange = requestSheet.getDataRange();
     const requestValues = requestDataRange.getValues();
     const requestHeaders = requestValues[0];
-    const requestHeaderMap = new Map(requestHeaders.map((h, i) => [h.trim(), i]));
-    const reqIdCol = requestHeaderMap.get('RequestID');
+    const reqIdCol = requestHeaders.indexOf('RequestID');
     let requestRowData = null;
     for (let i = 1; i < requestValues.length; i++) {
       if (requestValues[i][reqIdCol] === requestId) {
@@ -3854,66 +3879,39 @@ function getPreviewOrgChartData(requestId) {
     }
     if (!requestRowData) throw new Error(`Request ID ${requestId} not found.`);
 
-    // --- Simulate the Change ---
-    // Create a deep copy of the main data to modify
-    let previewData = JSON.parse(JSON.stringify(mainData));
-    const posIdIndex = mainHeaderMap.get('Position ID');
-    const empIdIndex = mainHeaderMap.get('Employee ID');
-    const empNameIndex = mainHeaderMap.get('Employee Name');
-    const statusIndex = mainHeaderMap.get('Status');
-    const jobTitleIndex = mainHeaderMap.get('Job Title');
-    const levelIndex = mainHeaderMap.get('Level');
-    const divisionIndex = mainHeaderMap.get('Division');
-    const groupIndex = mainHeaderMap.get('Group');
-    const departmentIndex = mainHeaderMap.get('Department');
-    const sectionIndex = mainHeaderMap.get('Section');
-    const reportingToIndex = mainHeaderMap.get('Reporting to ID');
-
+    // --- Simulate the Change on a deep copy of the objects ---
+    let previewObjects = JSON.parse(JSON.stringify(liveObjects));
     const requestType = requestRowData['RequestType'];
-    let changedPositionIds = new Set(); // Keep track of modified/added positions
-    let changeDescription = ''; // Description of the change for highlighting
+    let changedPositionIds = new Set();
+    let changeDescription = '';
 
     if (requestType.includes('Transfer') || requestType.includes('Promotion')) {
-      const newPositionId = requestRowData['NewPositionID'];
       const employeeId = requestRowData['EmployeeID'];
+      const newPositionId = requestRowData['NewPositionID'];
       const employeeName = requestRowData['EmployeeName'];
       const effectiveDate = requestRowData['EffectiveDate'];
       changeDescription = `${requestType}: ${employeeName} to ${newPositionId}`;
 
-      let oldPositionIndex = -1;
-      let newPositionIndex = -1;
+      const oldPosition = previewObjects.find(p => p.employeeid === employeeId);
+      const newPosition = previewObjects.find(p => p.positionid === newPositionId);
 
-      // Find old and new positions
-      for (let i = 0; i < previewData.length; i++) {
-        if (previewData[i][empIdIndex] === employeeId) {
-          oldPositionIndex = i;
-        }
-        if (previewData[i][posIdIndex] === newPositionId) {
-          newPositionIndex = i;
-        }
+      if (oldPosition) {
+        oldPosition.employeeid = '';
+        oldPosition.employeename = '';
+        oldPosition.status = 'VACANT';
+        oldPosition.isPreviewChange = true;
+        oldPosition.changeType = 'Vacated';
+        changedPositionIds.add(oldPosition.positionid);
       }
 
-      // Vacate old position
-      if (oldPositionIndex !== -1) {
-        previewData[oldPositionIndex][empIdIndex] = '';
-        previewData[oldPositionIndex][empNameIndex] = '';
-        // Clear other personal details if necessary (Gender, DOB, etc.)
-        previewData[oldPositionIndex][statusIndex] = 'VACANT'; // Mark as vacant in preview
-        previewData[oldPositionIndex].isPreviewChange = true; // Mark row as changed
-        previewData[oldPositionIndex].changeType = 'Vacated';
-        changedPositionIds.add(previewData[oldPositionIndex][posIdIndex]);
-      }
-
-      // Fill new position
-      if (newPositionIndex !== -1) {
-        previewData[newPositionIndex][empIdIndex] = employeeId;
-        previewData[newPositionIndex][empNameIndex] = employeeName;
-        previewData[newPositionIndex][statusIndex] = requestType.toUpperCase(); // Reflect the status
-        // TODO: Optionally update other fields like Date Hired in position if needed from request
-        previewData[newPositionIndex].isPreviewChange = true; // Mark row as changed
-        previewData[newPositionIndex].changeType = requestType;
-         previewData[newPositionIndex].effectiveDate = effectiveDate; // Pass effective date for potential display
-        changedPositionIds.add(newPositionId);
+      if (newPosition) {
+        newPosition.employeeid = employeeId;
+        newPosition.employeename = employeeName;
+        newPosition.status = requestType.toUpperCase();
+        newPosition.isPreviewChange = true;
+        newPosition.changeType = requestType;
+        newPosition.effectiveDate = effectiveDate ? Utilities.formatDate(new Date(effectiveDate), Session.getScriptTimeZone(), 'yyyy-MM-dd') : null;
+        changedPositionIds.add(newPosition.positionid);
       } else {
         Logger.log(`Warning: New position ${newPositionId} not found during preview generation.`);
       }
@@ -3925,89 +3923,54 @@ function getPreviewOrgChartData(requestId) {
       const effectiveDate = requestRowData['EffectiveDate'];
       changeDescription = `Fill Vacancy: ${newEmployeeName} in ${vacantPositionId}`;
 
-      let positionIndex = -1;
-      for (let i = 0; i < previewData.length; i++) {
-        if (previewData[i][posIdIndex] === vacantPositionId) {
-          positionIndex = i;
-          break;
-        }
-      }
-
-      if (positionIndex !== -1) {
-        previewData[positionIndex][empIdIndex] = newEmployeeId;
-        previewData[positionIndex][empNameIndex] = newEmployeeName;
-        previewData[positionIndex][statusIndex] = 'FILLED VACANCY'; // Or derive from request if needed
-        // TODO: Update other fields like Date Hired if available in the request
-        previewData[positionIndex].isPreviewChange = true;
-        previewData[positionIndex].changeType = 'Filled Vacancy';
-         previewData[positionIndex].effectiveDate = effectiveDate;
+      const position = previewObjects.find(p => p.positionid === vacantPositionId);
+      if (position) {
+        position.employeeid = newEmployeeId;
+        position.employeename = newEmployeeName;
+        position.status = 'FILLED VACANCY';
+        position.isPreviewChange = true;
+        position.changeType = 'Filled Vacancy';
+        position.effectiveDate = effectiveDate ? Utilities.formatDate(new Date(effectiveDate), Session.getScriptTimeZone(), 'yyyy-MM-dd') : null;
         changedPositionIds.add(vacantPositionId);
       } else {
         Logger.log(`Warning: Vacant position ${vacantPositionId} not found during preview generation.`);
       }
 
     } else if (requestType.includes('newly created position')) {
-      const newJobTitle = requestRowData['NewJobTitle'];
-      const newLevel = requestRowData['NewLevel'];
-      const division = requestRowData['Division'];
-      const group = requestRowData['Group'];
-      const department = requestRowData['Department'];
-      const section = requestRowData['Section'];
-      const reportingToId = requestRowData['ReportingToId'];
-      const newEmployeeName = requestRowData['NewEmployeeName'];
-      const newEmployeeId = requestRowData['NewEmployeeID'];
-      changeDescription = `New Position: ${newJobTitle} filled by ${newEmployeeName}`;
-
-      // Simulate generating a *temporary* ID for preview purposes ONLY.
-      // This won't be the final ID, but needed for the chart structure.
+      changeDescription = `New Position: ${requestRowData['NewJobTitle']} filled by ${requestRowData['NewEmployeeName']}`;
       const tempNewPositionId = `PREVIEW-${requestId}`;
-
-      const newRow = Array(mainHeaders.length).fill('');
-      newRow[posIdIndex] = tempNewPositionId;
-      newRow[jobTitleIndex] = newJobTitle;
-      newRow[levelIndex] = newLevel;
-      newRow[divisionIndex] = division;
-      newRow[groupIndex] = group;
-      newRow[departmentIndex] = department;
-      newRow[sectionIndex] = section;
-      newRow[reportingToIndex] = reportingToId;
-      newRow[empIdIndex] = newEmployeeId;
-      newRow[empNameIndex] = newEmployeeName;
-      newRow[statusIndex] = 'NEW HIRE';
-      // TODO: Populate other relevant fields (Gender, DOB, Date Hired) if available in request
-      newRow.isPreviewChange = true;
-      newRow.changeType = 'New Position';
-      previewData.push(newRow);
+      
+      const newPositionObject = {
+        positionid: tempNewPositionId,
+        jobtitle: requestRowData['NewJobTitle'],
+        level: requestRowData['NewLevel'],
+        division: requestRowData['Division'],
+        group: requestRowData['Group'],
+        department: requestRowData['Department'],
+        section: requestRowData['Section'],
+        reportingtoid: requestRowData['ReportingToId'],
+        employeeid: requestRowData['NewEmployeeID'],
+        employeename: requestRowData['NewEmployeeName'],
+        status: 'NEW HIRE',
+        isPreviewChange: true,
+        changeType: 'New Position',
+        nodeId: tempNewPositionId,
+        managerId: requestRowData['ReportingToId']
+      };
+      
+      previewObjects.push(newPositionObject);
       changedPositionIds.add(tempNewPositionId);
     }
-
-    // --- Convert Array data to Object array for frontend ---
-    const previewObjects = previewData.map(row => {
-      let employee = {};
-      mainHeaders.forEach((header, i) => {
-        // Map original headers to employee object keys (simplified)
-        const key = header.toLowerCase().replace(/\s+/g, ''); // Simplistic key generation
-        employee[key] = row[i];
-      });
-      // Add the preview flags directly to the object
-       employee.isPreviewChange = row.isPreviewChange || false;
-       employee.changeType = row.changeType || '';
-       employee.effectiveDate = row.effectiveDate || null; // Pass effective date if set
-       employee.nodeId = employee['positionid']; // Assuming positionid is the unique node ID
-       employee.managerId = employee['reportingtoid']; // Assuming reportingtoid is the manager link
-      return employee;
-    });
-
-    // --- Add highlighting info ---
+    
+    // --- Return the final object ---
     return {
         chartData: previewObjects,
         highlightIds: Array.from(changedPositionIds),
-        changeDescription: changeDescription || requestType // Pass description
+        changeDescription: changeDescription || requestType
      };
 
   } catch (e) {
     Logger.log('Error in getPreviewOrgChartData for request ID ' + requestId + ': ' + e.message + ' Stack: ' + e.stack);
-    // Re-throw the error so the frontend knows something went wrong
-    throw new Error('Failed to generate preview data. ' + e.message);
+    return { error: 'Failed to generate preview data. ' + e.message };
   }
 }
