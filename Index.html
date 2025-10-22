@@ -5322,13 +5322,20 @@ function drawApprovalsTable() {
       // Add the Actions column WITH PREVIEW BUTTON
       columns.push({
         title: 'Actions',
-        data: 'RequestID', // Use RequestID to identify the row
-        orderable: false,   // Actions column shouldn't be sortable
+        data: null, // We'll use the whole row object
+        orderable: false,
         render: function(data, type, row) {
-          const escapedRequestId = String(data).replace(/'/g, "\\'"); // Basic escaping
-          return `<button onclick="openPreviewModal('${escapedRequestId}')" class="bg-indigo-500 text-white p-1 rounded text-xs mr-1 mb-1 sm:mb-0" title="Preview Change">Preview</button>
-                  <button onclick="handleApprovalAction('${escapedRequestId}', 'Approved')" class="bg-green-500 text-white p-1 rounded text-xs mr-1 mb-1 sm:mb-0" title="Approve Request">Approve</button>
-                  <button onclick="handleApprovalAction('${escapedRequestId}', 'Rejected')" class="bg-red-500 text-white p-1 rounded text-xs" title="Reject Request">Reject</button>`;
+          const escapedRequestId = String(row.RequestID).replace(/'/g, "\\'");
+          let buttons = `<button onclick="openPreviewModal('${escapedRequestId}')" class="bg-indigo-500 text-white p-1 rounded text-xs mr-1 mb-1 sm:mb-0" title="Preview Change">Preview</button>`;
+          
+          if (row.Status === 'Approved') {
+            buttons += `<button onclick="handleImplementAction('${escapedRequestId}')" class="bg-blue-600 text-white p-1 rounded text-xs" title="Implement Change">Implement</button>`;
+          } else if (row.Status === 'Pending') {
+            buttons += `<button onclick="handleApprovalAction('${escapedRequestId}', 'Approved')" class="bg-green-500 text-white p-1 rounded text-xs mr-1 mb-1 sm:mb-0" title="Approve Request">Approve</button>
+                        <button onclick="handleApprovalAction('${escapedRequestId}', 'Rejected')" class="bg-red-500 text-white p-1 rounded text-xs" title="Reject Request">Reject</button>`;
+          }
+          
+          return buttons;
         }
       });
 
@@ -5387,6 +5394,26 @@ function handleApprovalAction(requestId, action) {
       alert('Error: ' + err.message);
     })
     .processRequestAction(requestId, action, comments);
+}
+
+function handleImplementAction(requestId) {
+  if (!confirm('Are you sure you want to implement this change? This will permanently alter the main org chart.')) {
+    return;
+  }
+  
+  showSavingOverlay('Implementing Change...');
+  google.script.run
+    .withSuccessHandler(response => {
+      // Performed a full refresh instead of a partial one to avoid rate-limiting issues.
+      fetchData(); 
+      hideSavingOverlay();
+      // No alert needed, the refresh is sufficient feedback.
+    })
+    .withFailureHandler(err => {
+      hideSavingOverlay();
+      alert('Error: ' + err.message);
+    })
+    .implementApprovedChange(requestId);
 }
 
 function updateRequestLocationDropdowns(level, selectedValue) {
