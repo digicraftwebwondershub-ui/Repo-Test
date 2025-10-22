@@ -2,22 +2,6 @@
  * @OnlyCurrentDoc
  */
 
-// --- DEPLOYMENT INSTRUCTIONS ---
-// IMPORTANT: After making any changes to this script, you MUST deploy a new version for the changes to take effect in the web app.
-// 1. Go to the top menu in the Apps Script editor and click "Deploy".
-// 2. Select "New deployment".
-// 3. IMPORTANT: In the "New deployment" dialog:
-//    a. Click the gear icon next to "Select type" and choose "Web app".
-//    b. For "Description", enter a brief note about the changes you made (e.g., "Added preview function for approvals").
-//    c. For "Execute as", select "Me".
-//    d. For "Who has access", select "Anyone".
-// 4. Click "Deploy".
-// 5. After deploying, a new Web app URL will be provided. You MUST copy this new URL.
-// 6. Paste the new URL into the `WEB_APP_URL` constant below, replacing the old one.
-//
-// NOTE: The "Script function not found: getPreviewOrgChartData" error specifically occurs when this deployment step is missed after adding that function.
-// --- END DEPLOYMENT INSTRUCTIONS ---
-
 
 // --- CONFIGURATION ---
 // IMPORTANT: You MUST update this URL if you create a new web app deployment that changes its link!
@@ -3855,10 +3839,15 @@ function getPreviewOrgChartData(requestId) {
       let employee = {};
       mainHeaders.forEach((header, i) => {
         const key = header.toLowerCase().replace(/\s+/g, '').replace(/[^a-z0-9]/gi, '');
-        employee[key] = row[i];
+        // FIX: Ensure dates are formatted here before they are even used
+        if (row[i] instanceof Date) {
+          employee[key] = Utilities.formatDate(row[i], Session.getScriptTimeZone(), 'yyyy-MM-dd');
+        } else {
+          employee[key] = row[i];
+        }
       });
-      employee.nodeId = employee['positionid'];
-      employee.managerId = employee['reportingtoid'];
+      employee.nodeId = String(employee['positionid'] || '');
+      employee.managerId = String(employee['reportingtoid'] || '');
       return employee;
     });
     
@@ -3962,9 +3951,24 @@ function getPreviewOrgChartData(requestId) {
       changedPositionIds.add(tempNewPositionId);
     }
     
+    // --- FINAL DATA SANITIZATION ---
+    // Ensure all objects in the array are clean for JSON serialization, especially dates.
+    const sanitizedObjects = previewObjects.map(obj => {
+      const sanitizedObj = {};
+      for (const key in obj) {
+        if (obj[key] instanceof Date) {
+          sanitizedObj[key] = Utilities.formatDate(obj[key], Session.getScriptTimeZone(), 'yyyy-MM-dd');
+        } else {
+          sanitizedObj[key] = obj[key];
+        }
+      }
+      return sanitizedObj;
+    });
+
+
     // --- Return the final object ---
     return {
-        chartData: previewObjects,
+        chartData: sanitizedObjects, // Use the sanitized data
         highlightIds: Array.from(changedPositionIds),
         changeDescription: changeDescription || requestType
      };
