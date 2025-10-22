@@ -3881,15 +3881,15 @@ function getPreviewOrgChartData(requestId) {
       const effectiveDate = requestRowData['EffectiveDate'];
       changeDescription = `${requestType}: ${employeeName} to ${newPositionId}`;
 
-      const oldPosition = previewObjects.find(p => p.employeeid === employeeId);
+      const oldPosition = previewObjects.find(p => p.positionid === requestRowData['CurrentPositionID']);
       const newPosition = previewObjects.find(p => p.positionid === newPositionId);
 
       if (oldPosition) {
-        oldPosition.employeeid = '';
-        oldPosition.employeename = '';
-        oldPosition.status = 'VACANT';
+        // oldPosition.employeeid = ''; // DO NOT CLEAR - This was the bug
+        // oldPosition.employeename = ''; // DO NOT CLEAR - This was the bug
+        // oldPosition.status = 'VACANT'; // DO NOT CHANGE STATUS
         oldPosition.isPreviewChange = true;
-        oldPosition.changeType = 'Vacated';
+        oldPosition.changeType = 'VACATED BY ' + employeeName;
         changedPositionIds.add(oldPosition.positionid);
       }
 
@@ -3898,7 +3898,7 @@ function getPreviewOrgChartData(requestId) {
         newPosition.employeename = employeeName;
         newPosition.status = requestType.toUpperCase();
         newPosition.isPreviewChange = true;
-        newPosition.changeType = requestType;
+        newPosition.changeType = requestType.toUpperCase() + ' - ' + employeeName;
         newPosition.effectiveDate = effectiveDate ? Utilities.formatDate(new Date(effectiveDate), Session.getScriptTimeZone(), 'yyyy-MM-dd') : null;
         changedPositionIds.add(newPosition.positionid);
       } else {
@@ -3951,6 +3951,36 @@ function getPreviewOrgChartData(requestId) {
       changedPositionIds.add(tempNewPositionId);
     }
     
+    // --- START: NEW HIERARCHY REBUILD LOGIC ---
+    // After simulating changes, the reporting structure might be broken.
+    // We need to rebuild the managerId links based on the new state of previewObjects.
+    const newEmployeeIdToPositionIdMap = new Map();
+    previewObjects.forEach(p => {
+      if (p.employeeid) {
+        newEmployeeIdToPositionIdMap.set(String(p.employeeid).trim(), p.positionid);
+      }
+    });
+
+    previewObjects.forEach(p => {
+      const managerEmployeeId = (p.reportingtoid || '').toString().trim();
+      if (managerEmployeeId) {
+        // Find the manager's NEW position ID from our fresh map
+        const newManagerPositionId = newEmployeeIdToPositionIdMap.get(managerEmployeeId);
+        if (newManagerPositionId) {
+          p.managerId = newManagerPositionId;
+        } else {
+          // If the manager ID points to an employee who no longer exists in a position
+          // (e.g., they were the one transferred out), this link should be broken.
+          p.managerId = ''; 
+          Logger.log(`Preview Warning: Could not find new position for manager with Employee ID ${managerEmployeeId}. Breaking link for ${p.positionid}.`);
+        }
+      } else {
+        // No manager employee ID, so no manager link.
+        p.managerId = '';
+      }
+    });
+    // --- END: NEW HIERARCHY REBUILD LOGIC ---
+
     // --- FINAL DATA SANITIZATION ---
     // Ensure all objects in the array are clean for JSON serialization, especially dates.
     const sanitizedObjects = previewObjects.map(obj => {
