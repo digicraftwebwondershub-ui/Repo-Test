@@ -5574,9 +5574,10 @@ function drawPreviewChart(previewDataArray) {
         let labelHtml = '';
 
         if (isHighlighted) {
-            highlightClass = (changeType === 'Vacated') ? 'preview-vacated' : 'preview-highlight';
-            const labelText = (changeType === 'Vacated') ? 'VACATED' : (changeType.toUpperCase() || 'CHANGED');
-            const labelColor = (changeType === 'Vacated') ? '#ef4444' : '#f59e0b';
+            const isVacated = (changeType || '').toUpperCase().startsWith('VACATED');
+            highlightClass = isVacated ? 'preview-vacated' : 'preview-highlight';
+            const labelText = changeType || 'CHANGED'; // Use the full string from the backend
+            const labelColor = isVacated ? '#ef4444' : '#f59e0b';
             labelHtml = `<div class="preview-label" style="background-color: ${labelColor};">${labelText}</div>`;
         }
         
