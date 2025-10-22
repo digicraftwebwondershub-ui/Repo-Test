@@ -63,67 +63,11 @@ function processRequestAction(requestId, action, comments) {
 
     for (let i = 1; i < data.length; i++) {
       if (data[i][requestIdCol] === requestId) {
-        const rowData = data[i];
-        
         // Update the status and approver details
         sheet.getRange(i + 1, headerMap.get('Status') + 1).setValue(action);
         sheet.getRange(i + 1, headerMap.get('ApproverEmail') + 1).setValue(Session.getActiveUser().getEmail());
         sheet.getRange(i + 1, headerMap.get('ApprovalTimestamp') + 1).setValue(new Date());
         sheet.getRange(i + 1, headerMap.get('ApproverComments') + 1).setValue(comments || '');
-
-        if (action === 'Approved') {
-          const requestType = rowData[headerMap.get('RequestType')];
-          let dataToSave = {};
-          let mode = 'edit'; // Default to edit
-
-          // --- IMPLEMENTATION LOGIC ---
-          if (requestType.includes('Transfer') || requestType.includes('Promotion')) {
-            dataToSave = {
-              positionid: rowData[headerMap.get('NewPositionID')],
-              employeeid: rowData[headerMap.get('EmployeeID')],
-              employeename: rowData[headerMap.get('EmployeeName')],
-              status: requestType,
-              startdateinposition: rowData[headerMap.get('EffectiveDate')]
-            };
-          } else if (requestType.includes('replacement for vacancy')) {
-            dataToSave = {
-              positionid: rowData[headerMap.get('VacantPositionID')],
-              employeeid: rowData[headerMap.get('NewEmployeeID')],
-              employeename: rowData[headerMap.get('NewEmployeeName')],
-              status: 'FILLED VACANCY',
-              startdateinposition: rowData[headerMap.get('EffectiveDate')]
-            };
-          } else if (requestType.includes('newly created position')) {
-            const division = rowData[headerMap.get('Division')];
-            const section = rowData[headerMap.get('Section')];
-            const newPositionId = generateNewPositionId(division, section);
-            if (newPositionId.startsWith('ERROR')) {
-              throw new Error('Could not generate new Position ID: ' + newPositionId);
-            }
-            
-            dataToSave = {
-              positionid: newPositionId,
-              jobtitle: rowData[headerMap.get('NewJobTitle')],
-              level: rowData[headerMap.get('NewLevel')],
-              division: division,
-              group: rowData[headerMap.get('Group')],
-              department: rowData[headerMap.get('Department')],
-              section: section,
-              reportingtoid: rowData[headerMap.get('ReportingToId')],
-              status: 'NEW HIRE',
-              employeename: rowData[headerMap.get('NewEmployeeName')],
-              employeeid: rowData[headerMap.get('NewEmployeeID')],
-            };
-            mode = 'add';
-          }
-          
-          // Call the existing save function to apply the change
-          if (Object.keys(dataToSave).length > 0) {
-            saveEmployeeData(dataToSave, mode);
-            sheet.getRange(i + 1, headerMap.get('ImplementerEmail') + 1).setValue('System');
-            sheet.getRange(i + 1, headerMap.get('ImplementationTimestamp') + 1).setValue(new Date());
-          }
-        }
         
         return `Request ${requestId} has been successfully ${action}.`;
       }
@@ -132,6 +76,106 @@ function processRequestAction(requestId, action, comments) {
   } catch (e) {
     Logger.log('Error in processRequestAction: ' + e.message);
     throw new Error('Failed to process request action. ' + e.message);
+  }
+}
+
+function implementApprovedChange(requestId) {
+  try {
+    Logger.log(`Starting implementation for request ID: ${requestId}`);
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const sheet = ss.getSheetByName('Org Chart Requests');
+    if (!sheet) {
+      throw new Error('"Org Chart Requests" sheet not found.');
+    }
+    const data = sheet.getDataRange().getValues();
+    const headers = data[0];
+    const headerMap = new Map(headers.map((h, i) => [h, i]));
+
+    const requestIdCol = headerMap.get('RequestID');
+    let requestFound = false;
+
+    for (let i = 1; i < data.length; i++) {
+      if (data[i][requestIdCol] === requestId) {
+        requestFound = true;
+        const rowData = data[i];
+        Logger.log(`Found request data in row ${i + 1}: ${JSON.stringify(rowData.map(cell => cell instanceof Date ? cell.toISOString() : cell))}`);
+
+
+        const requestType = rowData[headerMap.get('RequestType')];
+        Logger.log(`Request type: ${requestType}`);
+        let dataToSave = {};
+        let mode = 'edit'; // Default to edit
+
+        // --- IMPLEMENTATION LOGIC ---
+        if (requestType.includes('Transfer') || requestType.includes('Promotion')) {
+          dataToSave = {
+            positionid: rowData[headerMap.get('NewPositionID')],
+            employeeid: rowData[headerMap.get('EmployeeID')],
+            employeename: rowData[headerMap.get('EmployeeName')],
+            status: requestType,
+            startdateinposition: rowData[headerMap.get('EffectiveDate')]
+          };
+        } else if (requestType.includes('replacement for vacancy')) {
+          dataToSave = {
+            positionid: rowData[headerMap.get('VacantPositionID')],
+            employeeid: rowData[headerMap.get('NewEmployeeID')],
+            employeename: rowData[headerMap.get('NewEmployeeName')],
+            status: 'FILLED VACANCY',
+            startdateinposition: rowData[headerMap.get('EffectiveDate')]
+          };
+        } else if (requestType.includes('newly created position')) {
+          const division = rowData[headerMap.get('Division')];
+          const section = rowData[headerMap.get('Section')];
+          Logger.log(`Generating new position ID for Division: ${division}, Section: ${section}`);
+          const newPositionId = generateNewPositionId(division, section);
+          Logger.log(`Generated new Position ID: ${newPositionId}`);
+          if (newPositionId.startsWith('ERROR')) {
+            throw new Error('Could not generate new Position ID: ' + newPositionId);
+          }
+          
+          dataToSave = {
+            positionid: newPositionId,
+            jobtitle: rowData[headerMap.get('NewJobTitle')],
+            level: rowData[headerMap.get('NewLevel')],
+            division: division,
+            group: rowData[headerMap.get('Group')],
+            department: rowData[headerMap.get('Department')],
+            section: section,
+            reportingtoid: rowData[headerMap.get('ReportingToId')],
+            status: 'NEW HIRE',
+            employeename: rowData[headerMap.get('NewEmployeeName')],
+            employeeid: rowData[headerMap.get('NewEmployeeID')],
+          };
+          mode = 'add';
+        }
+        
+        Logger.log(`Data to save: ${JSON.stringify(dataToSave)}, mode: ${mode}`);
+
+        // Call the existing save function to apply the change
+        if (Object.keys(dataToSave).length > 0) {
+          Logger.log('Calling saveEmployeeData...');
+          const saveResult = saveEmployeeData(dataToSave, mode);
+          Logger.log(`saveEmployeeData result: ${saveResult}`);
+
+          Logger.log('Updating implementation details in "Org Chart Requests" sheet.');
+          sheet.getRange(i + 1, headerMap.get('ImplementerEmail') + 1).setValue(Session.getActiveUser().getEmail());
+          sheet.getRange(i + 1, headerMap.get('ImplementationTimestamp') + 1).setValue(new Date());
+          Logger.log('Implementation details updated.');
+        } else {
+            Logger.log('No data to save for this request type.');
+        }
+
+        return `Request ${requestId} has been successfully implemented.`;
+      }
+    }
+
+    if (!requestFound) {
+      throw new Error(`Request ID ${requestId} not found for implementation.`);
+    }
+
+  } catch (e) {
+    Logger.log('FATAL Error in implementApprovedChange: ' + e.message + ' Stack: ' + e.stack);
+    return { error: 'Failed to implement request. ' + e.message };
   }
 }
 
