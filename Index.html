@@ -5471,20 +5471,30 @@ function openPreviewModal(requestId) {
 
     google.script.run
         .withSuccessHandler(previewResult => {
+            if (previewResult && previewResult.error) {
+                chartDiv.innerHTML = `<p class="text-red-500 p-4 font-bold text-center">Server Error: ${previewResult.error}</p>`;
+                loader.style.display = 'none';
+                descP.textContent = 'Error loading preview.';
+                return;
+            }
             if (!previewResult || !previewResult.chartData) {
                 chartDiv.innerHTML = '<p class="text-red-500 p-4 font-bold text-center">Error: Received invalid data structure from server.</p>';
-                 loader.style.display = 'none';
-                 descP.textContent = 'Error loading preview.';
+                loader.style.display = 'none';
+                descP.textContent = 'Error loading preview.';
                 return;
             }
             previewHighlightIds = previewResult.highlightIds || [];
             previewChangeDescription = previewResult.changeDescription || 'Previewing Change';
             descP.textContent = previewChangeDescription;
-            drawPreviewChart(previewResult.chartData); // Pass the chartData array
+            drawPreviewChart(previewResult.chartData);
             loader.style.display = 'none';
         })
         .withFailureHandler(error => {
-            chartDiv.innerHTML = `<p class="text-red-500 p-4 font-bold text-center">Error generating preview: ${error.message}</p>`;
+            let errorMessage = error.message;
+            if (error.message.includes("Script function not found")) {
+                errorMessage = "The application script has been updated. Please ask the administrator to deploy the latest version of the Web App to enable this feature.";
+            }
+            chartDiv.innerHTML = `<p class="text-red-500 p-4 font-bold text-center">Error generating preview: ${errorMessage}</p>`;
             loader.style.display = 'none';
             descP.textContent = 'Error loading preview.';
         })
