@@ -5471,30 +5471,29 @@ function openPreviewModal(requestId) {
 
     google.script.run
         .withSuccessHandler(previewResult => {
-            if (previewResult && previewResult.error) {
-                chartDiv.innerHTML = `<p class="text-red-500 p-4 font-bold text-center">Server Error: ${previewResult.error}</p>`;
-                loader.style.display = 'none';
-                descP.textContent = 'Error loading preview.';
-                return;
-            }
-            if (!previewResult || !previewResult.chartData) {
+            // --- MODIFIED ERROR HANDLING ---
+            if (!previewResult || (!previewResult.chartData && !previewResult.error)) {
                 chartDiv.innerHTML = '<p class="text-red-500 p-4 font-bold text-center">Error: Received invalid data structure from server.</p>';
                 loader.style.display = 'none';
                 descP.textContent = 'Error loading preview.';
                 return;
             }
+            // If the backend sent a specific error message, display it
+            if (previewResult.error) {
+                chartDiv.innerHTML = `<p class="text-red-500 p-4 font-bold text-center">Backend Error: ${previewResult.error}</p>`;
+                loader.style.display = 'none';
+                descP.textContent = 'Error loading preview.';
+                return;
+            }
+            // --- END MODIFIED ERROR HANDLING ---
             previewHighlightIds = previewResult.highlightIds || [];
             previewChangeDescription = previewResult.changeDescription || 'Previewing Change';
             descP.textContent = previewChangeDescription;
-            drawPreviewChart(previewResult.chartData);
+            drawPreviewChart(previewResult.chartData); // Pass the chartData array
             loader.style.display = 'none';
         })
         .withFailureHandler(error => {
-            let errorMessage = error.message;
-            if (error.message.includes("Script function not found")) {
-                errorMessage = "The application script has been updated. Please ask the administrator to deploy the latest version of the Web App to enable this feature.";
-            }
-            chartDiv.innerHTML = `<p class="text-red-500 p-4 font-bold text-center">Error generating preview: ${errorMessage}</p>`;
+            chartDiv.innerHTML = `<p class="text-red-500 p-4 font-bold text-center">Error generating preview: ${error.message}</p>`;
             loader.style.display = 'none';
             descP.textContent = 'Error loading preview.';
         })
@@ -5522,25 +5521,46 @@ function zoomPreview(amount) {
  */
 function drawPreviewChart(previewDataArray) {
     var chartDiv = document.getElementById('preview_chart_div');
-    if (previewDataArray.length === 0) {
+    if (!previewDataArray || previewDataArray.length === 0) {
         chartDiv.innerHTML = '<p class="text-center text-gray-500 pt-10">No data to display for preview.</p>';
         return;
     }
 
-    // Convert previewDataArray (array of objects) into the format needed by getChartData function (if necessary)
-    // Assuming getChartData can handle the object array directly
-    // If getChartData expects the array-of-arrays format, you'll need conversion here.
-    // For now, assuming getChartData is compatible or can be adapted.
+    // --- MAJOR FIX: Create a temporary, local employeeMap for this preview ---
+    const previewEmployeeMap = new Map(previewDataArray.map(emp => [emp.nodeId, emp]));
 
-    // Reuse getChartData logic to handle hierarchy (finding managers etc.)
-    // Note: getChartData needs to work with the object format or be adapted.
-    // Let's assume for now it can work with the objects having nodeId and managerId
-    var chartDataForDisplay = getChartData(previewDataArray); // Reuses hierarchy logic
+    // This is a modified version of getChartData that accepts the local map
+    const getPreviewChartData = (filteredData, localMap) => {
+        var finalSet = new Set(filteredData);
+        var positionsToProcess = Array.from(finalSet);
+        positionsToProcess.forEach(function(pos) {
+            var current = pos;
+            var path = new Set();
+            while (current && current.managerId) {
+                if (path.has(current.managerId)) {
+                    console.error('Circular reference detected in preview for:', pos.positionId);
+                    break;
+                }
+                path.add(current.managerId);
+                var manager = localMap.get(current.managerId);
+                if (manager && !finalSet.has(manager)) {
+                    finalSet.add(manager);
+                    current = manager;
+                } else {
+                    break;
+                }
+            }
+        });
+        return Array.from(finalSet);
+    };
+    
+    // Use the local map to build the complete hierarchy
+    var chartDataForDisplay = getPreviewChartData(previewDataArray, previewEmployeeMap);
 
-     if (chartDataForDisplay.length === 0) {
-          chartDiv.innerHTML = '<p class="text-center text-gray-500 pt-10">Chart rendering error or no root node found.</p>';
-          return;
-      }
+    if (chartDataForDisplay.length === 0) {
+        chartDiv.innerHTML = '<p class="text-center text-gray-500 pt-10">Chart rendering error: No root node found in preview data.</p>';
+        return;
+    }
 
     previewDataTable = new google.visualization.DataTable();
     previewDataTable.addColumn('string', 'Node ID');
@@ -5548,70 +5568,50 @@ function drawPreviewChart(previewDataArray) {
 
     chartDataForDisplay.forEach(function(emp) {
         let nodeHtml;
-        const isHighlighted = previewHighlightIds.includes(emp.nodeId);
-        const changeType = emp.changeType || ''; // Get change type from the object
+        const isHighlighted = emp.isPreviewChange || false;
+        const changeType = emp.changeType || '';
         let highlightClass = '';
         let labelHtml = '';
 
-        // Determine highlighting class and label based on change type
         if (isHighlighted) {
-            if (changeType === 'Vacated') {
-                 highlightClass = 'preview-vacated';
-                 labelHtml = `<div class="preview-label" style="background-color: #ef4444;">VACATED</div>`;
-            } else {
-                 highlightClass = 'preview-highlight';
-                 labelHtml = `<div class="preview-label">${changeType.toUpperCase() || 'CHANGED'}</div>`;
-            }
+            highlightClass = (changeType === 'Vacated') ? 'preview-vacated' : 'preview-highlight';
+            const labelText = (changeType === 'Vacated') ? 'VACATED' : (changeType.toUpperCase() || 'CHANGED');
+            const labelColor = (changeType === 'Vacated') ? '#ef4444' : '#f59e0b';
+            labelHtml = `<div class="preview-label" style="background-color: ${labelColor};">${labelText}</div>`;
         }
+        
+        const isInactive = (emp.positionstatus || '').toUpperCase() === 'INACTIVE';
+        let inactiveOverlayHtml = isInactive ? '<div class="inactive-overlay">INACTIVE</div>' : '';
 
-        // --- Generate Node HTML (largely reused from drawChart, but adds highlightClass and labelHtml) ---
-         const isInactive = (emp.positionstatus || '').toUpperCase() === 'INACTIVE'; // Use object property access
-         let inactiveOverlayHtml = isInactive ? '<div class="inactive-overlay">INACTIVE</div>' : '';
-
-        // IMPORTANT: We don't need action buttons in the preview
-         let actionsHtml = ''; // No edit/delete actions in preview
-
-         if (emp.employeeid) { // Use object property access
-             // ... (rest of the filled node HTML generation logic from drawChart)
-             // ... (make sure to use object property access like emp.gender, emp.jobtitle etc.)
-
-             // Example Snippet (adapt based on your full drawChart logic):
-             const contractTypeUpper = emp.stylingcontracttype ? emp.stylingcontracttype.toUpperCase() : ''; // Example access
-             let levelBorderClass = 'level-' + (emp.level || 'default') + '-border';
-             let levelBgClass = 'level-' + (emp.level || 'default') + '-bg';
-             let contractClass = '';
-             // ... logic for contract styles ...
-             const photoUrl = emp.gender && emp.gender.toLowerCase() === 'female' ? 'https://i.imgur.com/dTvdfy0.png' : 'https://i.imgur.com/bIbZ89x.png';
-             const deptSection = emp.section ? (emp.department + ' (' + emp.section + ')') : emp.department;
-             // ... logic for badges ...
-             const badgeHtml = '...'; // Construct badge HTML using emp.payrolltype etc.
-
-            nodeHtml = `<div class="node-card ${levelBorderClass} ${levelBgClass} ${contractClass} ${highlightClass}">` + // Added highlightClass
-                            labelHtml + // Added labelHtml
-                            inactiveOverlayHtml + actionsHtml + // actionsHtml is empty here
-                            `<img src="${photoUrl}" onerror="this.onerror=null;this.src='https://i.imgur.com/RHvayzz.png';">` +
-                            '<div class="node-text">' +
-                              `<div class="name">${emp.employeename || 'N/A'}</div>` +
-                              `<div class="title">${emp.jobtitle || 'N/A'}</div>` +
-                              `<div class="dept">${deptSection || ''}</div>` +
-                            '</div>' +
-                            badgeHtml +
-                          '</div>';
-
-         } else { // Vacant Node
-             nodeHtml = `<div class="vacant-card ${highlightClass}">` + // Added highlightClass
-                             labelHtml + // Added labelHtml
-                             inactiveOverlayHtml + actionsHtml +
-                             '<div class="name">VACANT</div>' +
-                             `<div class="title">${emp.jobtitle || 'N/A'}</div>` +
-                          '</div>';
-         }
+        if (emp.employeeid) {
+            const photoUrl = emp.gender && emp.gender.toLowerCase() === 'female' ? 'https://i.imgur.com/dTvdfy0.png' : 'https://i.imgur.com/bIbZ89x.png';
+            const deptSection = emp.section ? `${emp.department || ''} (${emp.section})` : (emp.department || '');
+            const levelClass = `level-${emp.level || 'default'}`;
+            
+            nodeHtml = `<div class="node-card ${levelClass}-border ${levelClass}-bg ${highlightClass}">
+                            ${labelHtml}
+                            ${inactiveOverlayHtml}
+                            <img src="${photoUrl}" onerror="this.onerror=null;this.src='https://i.imgur.com/RHvayzz.png';">
+                            <div class="node-text">
+                              <div class="name">${emp.employeename || 'N/A'}</div>
+                              <div class="title">${emp.jobtitle || 'N/A'}</div>
+                              <div class="dept">${deptSection}</div>
+                            </div>
+                          </div>`;
+        } else {
+            nodeHtml = `<div class="vacant-card ${highlightClass}">
+                            ${labelHtml}
+                            ${inactiveOverlayHtml}
+                            <div class="name">VACANT</div>
+                            <div class="title">${emp.jobtitle || 'N/A'}</div>
+                          </div>`;
+        }
 
         previewDataTable.addRow([{ v: emp.nodeId, f: nodeHtml }, emp.managerId]);
     });
 
     previewChart = new google.visualization.OrgChart(chartDiv);
-    previewChart.draw(previewDataTable, { allowHtml: true, allowCollapse: true, nodeClass: 'google-visualization-orgchart-node' }); // Use default node class
+    previewChart.draw(previewDataTable, { allowHtml: true, allowCollapse: true, nodeClass: 'google-visualization-orgchart-node' });
 }
 
 </script>
